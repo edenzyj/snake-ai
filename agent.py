@@ -1,5 +1,8 @@
 import time
 import torch
+import tensorflow as tf
+import keras
+from keras import layers
 import random
 import numpy as np
 from collections import deque
@@ -19,9 +22,30 @@ class Agent:
         self.epsilon = 0 # randomness
         self.gamma = 0.9 # discount rate
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
-        self.model = Linear_QNet(11, 256, 3)
-        self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
+        self.reward = 0
+        
+        # Q-Learning tensorflow
+        self.model = self.network()
+        
+        # DQN
+        #self.model = Linear_QNet(11, 256, 3)
+        #self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
 
+    def network(self, weights=None):
+        model = keras.Sequential([
+            layers.Dense(120, activation='relu'),
+            layers.Dropout(0.15),
+            layers.Dense(120, activation='relu'),
+            layers.Dropout(0.15),
+            layers.Dense(3, activation='softmax'),
+        ])
+        
+        loss_func = keras.losses.mean_squared_error
+        opt = keras.optimizers.Adam(learning_rate=LR)
+        
+        model.compile(loss=loss_func, optimizer=opt)
+        
+        return model
 
     def get_state(self, game):
         head = game.snake[0]
@@ -77,14 +101,31 @@ class Agent:
             mini_sample = random.sample(self.memory, BATCH_SIZE) # list of tuples
         else:
             mini_sample = self.memory
-
+        
+        # Q-Learning tensorflow
+        for state, action, reward, next_state, done in mini_sample:
+            target = reward
+            if not done:
+                target = reward + self.gamma * np.amax(self.model.predict(np.array([next_state]))[0])
+            target_f = self.model.predict(np.array([state]))
+            target_f[0][np.argmax(action)] = target
+            self.model.fit(np.array([state]), target_f, epochs=1, verbose=0)
+        '''
+        # DQN
         states, actions, rewards, next_states, dones = zip(*mini_sample)
-        self.trainer.train_step(states, actions, rewards, next_states, dones)
-        #for state, action, reward, nexrt_state, done in mini_sample:
-        #    self.trainer.train_step(state, action, reward, next_state, done)
-
+        self.trainer.train_step(states, actions, rewards, next_states, dones)'''
+        
     def train_short_memory(self, state, action, reward, next_state, done):
-        self.trainer.train_step(state, action, reward, next_state, done)
+        # Q-Learning tensorflow
+        target = reward
+        if not done:
+            target = reward + self.gamma * np.amax(self.model.predict(np.array([next_state]))[0])
+        target_f = self.model.predict(np.array([state]))
+        target_f[0][np.argmax(action)] = target
+        self.model.fit(np.array([state]), target_f, epochs=1, verbose=0)
+        '''
+        # DQN
+        self.trainer.train_step(state, action, reward, next_state, done)'''
 
     def get_action(self, state):
         # random moves: tradeoff exploration / exploitation
@@ -94,9 +135,20 @@ class Agent:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
+            # Q-Learning tensorflow
+            state0 = tf.convert_to_tensor(state, dtype=tf.float32)
+            state0 = state0[tf.newaxis, :]
+            prediction = self.model.predict(state0)[0]
+            move = 2
+            for i in range(2):
+                if prediction[i] > prediction[move]:
+                    move = i
+            '''
+            # DQN
             state0 = torch.tensor(state, dtype=torch.float)
             prediction = self.model(state0)
-            move = torch.argmax(prediction).item()
+            move = torch.argmax(prediction).item()'''
+            
             final_move[move] = 1
 
         return final_move
