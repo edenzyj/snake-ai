@@ -17,20 +17,30 @@ LR = 0.001
 
 class Agent:
 
-    def __init__(self):
+    def __init__(self, w=640, h=480):
         self.n_games = 0
-        self.epsilon = 0 # randomness
+        self.epsilon = 1.0 # randomness
         self.gamma = 0.9 # discount rate
         self.memory = deque(maxlen=MAX_MEMORY) # popleft()
         self.reward = 0
         
+        # Q-Learning TD
+        self.alpha = 0.1
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.995
+        self.q_table = {}
+        
         # Q-Learning tensorflow
-        self.model = self.network()
+        #self.model = self.network()
         
         # DQN
         #self.model = Linear_QNet(11, 256, 3)
         #self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
 
+    def decay_epsilon(self):
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+    
     def network(self, weights=None):
         model = keras.Sequential([
             layers.Dense(120, activation='relu'),
@@ -96,6 +106,45 @@ class Agent:
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done)) # popleft if MAX_MEMORY is reached
 
+    def get_q_value(self, state, move):
+        snake_state = tuple(i for i in state)
+        if type(move) == int:
+            action = move
+        else:
+            action = 0
+            for i in range(3):
+                if move[i] == 1:
+                    action = i
+        return self.q_table.get((snake_state, action), 0.0)
+    
+    def update_long_q_value(self):
+        if len(self.memory) > BATCH_SIZE:
+            mini_sample = random.sample(self.memory, BATCH_SIZE)
+        else:
+            mini_sample = self.memory
+            
+        for state, move, reward, next_state, done in mini_sample:
+            old_value = self.get_q_value(state, move)
+            next_max = max(self.get_q_value(next_state, a) for a in range(3))
+            new_value = old_value + self.alpha * (reward + self.gamma * next_max - old_value)
+            snake_state = tuple(i for i in state)
+            action = 0
+            for i in range(3):
+                if move[i] == 1:
+                    action = i
+            self.q_table[(snake_state, action)] = new_value
+    
+    def update_short_q_value(self, state, move, reward, next_state, done):
+        old_value = self.get_q_value(state, move)
+        next_max = max(self.get_q_value(next_state, a) for a in range(3))
+        new_value = old_value + self.alpha * (reward + self.gamma * next_max - old_value)
+        snake_state = tuple(i for i in state)
+        action = 0
+        for i in range(3):
+            if move[i] == 1:
+                action = i
+        self.q_table[(snake_state, action)] = new_value
+    
     def train_long_memory(self):
         if len(self.memory) > BATCH_SIZE:
             mini_sample = random.sample(self.memory, BATCH_SIZE) # list of tuples
@@ -129,8 +178,20 @@ class Agent:
 
     def get_action(self, state):
         # random moves: tradeoff exploration / exploitation
-        self.epsilon = 80 - self.n_games
+        
         final_move = [0,0,0]
+        
+        # Q-Learning TD
+        if random.uniform(0, 1) < self.epsilon:
+            move = random.randint(0, 2)
+            final_move[move] = 1
+        else:
+            q_values = [self.get_q_value(state, a) for a in range(3)]
+            move = np.argmax(q_values)
+            final_move[move] = 1
+            
+        '''
+        self.epsilon = 80 - self.n_games
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
@@ -143,13 +204,13 @@ class Agent:
             for i in range(2):
                 if prediction[i] > prediction[move]:
                     move = i
-            '''
+            
             # DQN
             state0 = torch.tensor(state, dtype=torch.float)
             prediction = self.model(state0)
-            move = torch.argmax(prediction).item()'''
+            move = torch.argmax(prediction).item()
             
-            final_move[move] = 1
+            final_move[move] = 1'''
 
         return final_move
 
@@ -158,6 +219,7 @@ def train():
     plot_scores = []
     plot_mean_scores = []
     total_score = 0
+    score = 0
     record = 0
     agent = Agent()
     game = SnakeGameAI()
@@ -173,8 +235,11 @@ def train():
             reward, done, score = game.play_step(final_move)
             state_new = agent.get_state(game)
 
-            # train short memory
-            agent.train_short_memory(state_old, final_move, reward, state_new, done)
+            # update short time q-value of TD method
+            agent.update_short_q_value(state_old, final_move, reward, state_new, done)
+            
+            # train short memory of other methods
+            #agent.train_short_memory(state_old, final_move, reward, state_new, done)
 
             # remember
             agent.remember(state_old, final_move, reward, state_new, done)
@@ -183,11 +248,17 @@ def train():
                 # train long memory, plot result
                 game.reset()
                 agent.n_games += 1
-                agent.train_long_memory()
+                
+                # update long time q-value of TD method 
+                agent.update_long_q_value()
+                
+                # train long memory of other methods
+                #agent.train_long_memory()
 
                 if score > record:
                     record = score
-                    agent.model.save()
+                    # save model of other methods
+                    #agent.model.save()
 
                 print('Game', agent.n_games, 'Score', score, 'Record:', record)
 
@@ -196,6 +267,9 @@ def train():
                 mean_score = total_score / agent.n_games
                 plot_mean_scores.append(mean_score)
                 plot(plot_scores, plot_mean_scores)
+                
+                # Q-Learning TD
+                agent.decay_epsilon()
                 
         except KeyboardInterrupt:
             time.sleep(10)
